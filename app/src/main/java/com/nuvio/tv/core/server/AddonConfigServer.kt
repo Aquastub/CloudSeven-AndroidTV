@@ -14,8 +14,18 @@ class AddonConfigServer(
     private val currentPageStateProvider: () -> PageState,
     private val onChangeProposed: (PendingAddonChange) -> Unit,
     private val logoProvider: (() -> ByteArray?)? = null,
+    private val adinstHandler: AdinstUploadHandler? = null,
     port: Int = 8080
 ) : NanoHTTPD(port) {
+
+    /** Installs local addons (ADINST packages) sent from the web page. */
+    interface AdinstUploadHandler {
+        /** Checks the uploaded file and returns what to show before installing (ok, token, name, permissions). */
+        fun stage(tempPath: String, fileName: String): Map<String, Any?>
+
+        /** Installs the file staged under [token]. */
+        fun confirm(token: String): Map<String, Any?>
+    }
 
     enum class WebConfigMode(
         val allowAddonManagement: Boolean,
@@ -113,6 +123,9 @@ class AddonConfigServer(
         return when {
             method == Method.GET && uri == "/" -> serveWebPage()
             method == Method.GET && uri == "/logo.png" -> serveLogo()
+            method == Method.GET && uri == "/adinst" -> serveAdinstPage()
+            method == Method.POST && uri == "/api/adinst" -> handleAdinstUpload(session)
+            method == Method.POST && uri == "/api/adinst/confirm" -> handleAdinstConfirm(session)
             method == Method.GET && uri == "/api/state" -> servePageState()
             method == Method.GET && uri == "/api/addons" -> serveAddonList()
             method == Method.POST && uri == "/api/addons" -> handleAddonUpdate(session)
@@ -128,6 +141,47 @@ class AddonConfigServer(
             "text/html; charset=utf-8",
             AddonWebPage.getHtml(context, webConfigMode)
         )
+    }
+
+    private fun serveAdinstPage(): Response {
+        if (adinstHandler == null || !webConfigMode.allowAddonManagement) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
+        }
+        return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", AdinstUploadPage.HTML)
+    }
+
+    private fun jsonResponse(status: Response.Status, body: Map<String, Any?>): Response =
+        newFixedLengthResponse(status, "application/json; charset=utf-8", gson.toJson(body))
+
+    private fun handleAdinstUpload(session: IHTTPSession): Response {
+        val handler = adinstHandler
+        if (handler == null || !webConfigMode.allowAddonManagement) {
+            return jsonResponse(Response.Status.FORBIDDEN, mapOf("ok" to false, "error" to "Not allowed"))
+        }
+        return try {
+            val files = HashMap<String, String>()
+            session.parseBody(files)
+            val tempPath = files["file"]
+                ?: return jsonResponse(Response.Status.BAD_REQUEST, mapOf("ok" to false, "error" to "No file was sent"))
+            val fileName = session.parameters["file"]?.firstOrNull().orEmpty().ifBlank { "addon.adinst" }
+            jsonResponse(Response.Status.OK, handler.stage(tempPath, fileName))
+        } catch (e: Exception) {
+            jsonResponse(Response.Status.INTERNAL_ERROR, mapOf("ok" to false, "error" to (e.message ?: "Upload failed")))
+        }
+    }
+
+    private fun handleAdinstConfirm(session: IHTTPSession): Response {
+        val handler = adinstHandler
+        if (handler == null || !webConfigMode.allowAddonManagement) {
+            return jsonResponse(Response.Status.FORBIDDEN, mapOf("ok" to false, "error" to "Not allowed"))
+        }
+        return try {
+            session.parseBody(HashMap())
+            val token = session.parameters["token"]?.firstOrNull().orEmpty()
+            jsonResponse(Response.Status.OK, handler.confirm(token))
+        } catch (e: Exception) {
+            jsonResponse(Response.Status.INTERNAL_ERROR, mapOf("ok" to false, "error" to (e.message ?: "Install failed")))
+        }
     }
 
     private fun serveLogo(): Response {
@@ -232,6 +286,7 @@ class AddonConfigServer(
             currentPageStateProvider: () -> PageState,
             onChangeProposed: (PendingAddonChange) -> Unit,
             logoProvider: (() -> ByteArray?)? = null,
+            adinstHandler: AdinstUploadHandler? = null,
             startPort: Int = 8080,
             maxAttempts: Int = 10
         ): AddonConfigServer? {
@@ -243,6 +298,7 @@ class AddonConfigServer(
                         currentPageStateProvider = currentPageStateProvider,
                         onChangeProposed = onChangeProposed,
                         logoProvider = logoProvider,
+                        adinstHandler = adinstHandler,
                         port = port
                     )
                     server.start(SOCKET_READ_TIMEOUT, false)

@@ -12,6 +12,8 @@ import android.util.Log
 import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.app
 import com.lagradost.nicehttp.ignoreAllSSLErrors
+import com.nuvio.tv.core.localaddon.python.ChaquopyPythonHost
+import com.nuvio.tv.core.localaddon.python.PythonRuntime
 import com.nuvio.tv.core.sync.StartupSyncService
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,9 @@ class NuvioApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Embedded Python for local addons (nuvio.python). The interpreter itself only starts on first use.
+        PythonRuntime.host = ChaquopyPythonHost(this)
 
         // Install Conscrypt as the primary TLS provider.
         // This gives OkHttp a browser-compatible TLS fingerprint (JA3/JA4),

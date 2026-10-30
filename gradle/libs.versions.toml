@@ -1,5 +1,6 @@
 [versions]
 agp = "8.13.2"
+chaquopy = "17.1.0"
 cryptoJs = "4.2.0"
 kotlin = "2.3.0"
 coreKtx = "1.15.0"
@@ -138,6 +139,7 @@ android-test = { id = "com.android.test", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+chaquopy = { id = "com.chaquo.python", version.ref = "chaquopy" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "baselineProfilePlugin" }

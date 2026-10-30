@@ -1,6 +1,7 @@
 package com.nuvio.tv.core.plugin
 
 import android.util.Log
+import com.dokar.quickjs.binding.asyncFunction
 import com.dokar.quickjs.binding.define
 import com.dokar.quickjs.binding.function
 import com.dokar.quickjs.quickJs
@@ -8,7 +9,9 @@ import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.domain.model.LocalScraperResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
@@ -42,6 +45,8 @@ private const val PLUGIN_TIMEOUT_MS = 60_000L
 private const val MAX_FETCH_RESPONSE_BYTES = 256 * 1024
 private const val MAX_FETCH_BODY_CHARS = 256 * 1024
 private const val MAX_FETCH_HEADER_VALUE_CHARS = 8 * 1024
+// Local (ADINST) addons may download whole catalogs, so their fetch limit is much higher than a scraper's.
+private const val LOCAL_ADDON_MAX_FETCH_BYTES = 16 * 1024 * 1024
 private const val FETCH_TRUNCATION_SUFFIX = "\n...[truncated]"
 
 @Singleton
@@ -390,12 +395,121 @@ class PluginRuntime @Inject constructor() {
         }
     }
 
+    /**
+     * Runs a local (ADINST) addon: loads its script and calls `handle(request)`. Returns the JSON the addon
+     * produced, or "{}" when it failed or took too long. The script gets the same `fetch`, `URL` and
+     * crypto-js as a scraper, plus `nuvio.storage` and `nuvio.python`.
+     */
+    suspend fun executeLocalAddon(
+        slug: String,
+        code: String,
+        requestJson: String,
+        storageCall: suspend (operation: String, key: String, value: String) -> String,
+        programCall: suspend (operation: String, payload: String) -> String,
+    ): String = withContext(Dispatchers.IO) {
+        try {
+            withTimeout(PLUGIN_TIMEOUT_MS) {
+                executeLocalAddonInternal(slug, code, requestJson, storageCall, programCall)
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Local addon $slug timed out")
+            "{}"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Local addon $slug failed: ${e.message}", e)
+            "{}"
+        }
+    }
+
+    private suspend fun executeLocalAddonInternal(
+        slug: String,
+        code: String,
+        requestJson: String,
+        storageCall: suspend (operation: String, key: String, value: String) -> String,
+        programCall: suspend (operation: String, payload: String) -> String,
+    ): String {
+        val inFlightCalls = ConcurrentHashMap.newKeySet<Call>()
+        var resultJson = "{}"
+        try {
+            quickJs(Dispatchers.IO) {
+                define("console") {
+                    function("log") { args -> Log.d("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                    function("error") { args -> Log.e("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                    function("warn") { args -> Log.w("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                    function("info") { args -> Log.i("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                    function("debug") { args -> Log.d("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                }
+
+                function("__native_fetch") { args ->
+                    val url = args.getOrNull(0)?.toString() ?: ""
+                    val method = args.getOrNull(1)?.toString() ?: "GET"
+                    val headersJson = args.getOrNull(2)?.toString() ?: "{}"
+                    val body = args.getOrNull(3)?.toString() ?: ""
+                    try {
+                        performNativeFetch(url, method, headersJson, body, inFlightCalls, LOCAL_ADDON_MAX_FETCH_BYTES)
+                    } catch (t: Throwable) {
+                        gson.toJson(
+                            mapOf(
+                                "ok" to false,
+                                "status" to 0,
+                                "statusText" to (t.message ?: "Fetch failed"),
+                                "url" to url,
+                                "body" to "",
+                                "headers" to emptyMap<String, String>()
+                            )
+                        )
+                    }
+                }
+                function("__parse_url") { args -> parseUrl(args.getOrNull(0)?.toString() ?: "") }
+                asyncFunction("__storage_call") { args ->
+                    storageCall(
+                        args.getOrNull(0)?.toString().orEmpty(),
+                        args.getOrNull(1)?.toString().orEmpty(),
+                        args.getOrNull(2)?.toString().orEmpty(),
+                    )
+                }
+                asyncFunction("__program_call") { args ->
+                    programCall(
+                        args.getOrNull(0)?.toString().orEmpty(),
+                        args.getOrNull(1)?.toString() ?: "{}",
+                    )
+                }
+                function("__capture_result") { args ->
+                    resultJson = args.getOrNull(0)?.toString() ?: "{}"
+                    null
+                }
+
+                evaluate<Any?>(buildPolyfillCode(slug, "{}"))
+                loadCryptoJsSourceOrNull()?.let { evaluate<Any?>(it) }
+                evaluate<Any?>(LOCAL_ADDON_API_CODE)
+                evaluate<Any?>(
+                    """
+                    var module = { exports: {} };
+                    var exports = module.exports;
+                    (function() {
+                        $code
+                    })();
+                    """.trimIndent()
+                )
+                evaluate<Any?>("globalThis.__CALL_ARGS = ${gson.toJson(requestJson)};")
+                evaluate<Any?>(LOCAL_ADDON_CALL_CODE)
+            }
+            return resultJson
+        } finally {
+            // Cancel any network calls still in progress when the addon exits.
+            inFlightCalls.forEach { call -> call.cancel() }
+            inFlightCalls.clear()
+        }
+    }
+
     private fun performNativeFetch(
         url: String,
         method: String,
         headersJson: String,
         body: String,
-        inFlightCalls: MutableSet<Call>
+        inFlightCalls: MutableSet<Call>,
+        maxBytes: Int = MAX_FETCH_RESPONSE_BYTES
     ): String {
         Log.d(TAG, "Fetch: $method $url body=${body.take(200)}")
         return try {
@@ -462,7 +576,7 @@ class PluginRuntime @Inject constructor() {
                                 else -> stream
                             }
                             decodeStream.use {
-                                readAtMostBytes(it, MAX_FETCH_RESPONSE_BYTES)
+                                readAtMostBytes(it, maxBytes)
                             }
                         }
                     } catch (e: Exception) {
@@ -471,7 +585,7 @@ class PluginRuntime @Inject constructor() {
                     }
 
                     val charset = bodyContentType?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
-                    val responseBody = decodeBodyToSafeString(decodedRead.bytes, charset)
+                    val responseBody = decodeBodyToSafeString(decodedRead.bytes, charset, maxBytes)
                     val responseHeaders = mutableMapOf<String, String>()
                     httpResponse.headers.forEach { (name, value) ->
                         responseHeaders[name.lowercase()] = truncateString(value, MAX_FETCH_HEADER_VALUE_CHARS)
@@ -518,13 +632,17 @@ class PluginRuntime @Inject constructor() {
         return value.substring(0, end) + FETCH_TRUNCATION_SUFFIX
     }
 
-    private fun decodeBodyToSafeString(bytes: ByteArray, charset: java.nio.charset.Charset): String {
+    private fun decodeBodyToSafeString(
+        bytes: ByteArray,
+        charset: java.nio.charset.Charset,
+        maxBytes: Int = MAX_FETCH_RESPONSE_BYTES
+    ): String {
         val decoded = try {
             String(bytes, charset)
         } catch (e: Exception) {
             String(bytes, Charsets.UTF_8)
         }
-        return truncateString(decoded, MAX_FETCH_BODY_CHARS)
+        return truncateString(decoded, if (maxBytes > MAX_FETCH_RESPONSE_BYTES) maxBytes else MAX_FETCH_BODY_CHARS)
     }
 
     private fun readAtMostBytes(stream: InputStream, maxBytes: Int): BoundedReadResult {
@@ -1271,3 +1389,44 @@ class PluginRuntime @Inject constructor() {
         }
     }
 }
+
+private val LOCAL_ADDON_API_CODE = """
+    globalThis.nuvio = {
+        storage: {
+            get: async function (key) {
+                var r = JSON.parse(await __storage_call('get', String(key), ''));
+                return r.ok ? r.value : null;
+            },
+            set: async function (key, value) {
+                var r = JSON.parse(await __storage_call('set', String(key), String(value)));
+                if (!r.ok) throw new Error(r.error || 'storage failed');
+            }
+        },
+        python: {
+            available: async function () { return JSON.parse(await __program_call('python.available', '{}')); },
+            run: async function (spec) { return JSON.parse(await __program_call('python.run', JSON.stringify(spec || {}))); }
+        },
+        programs: {
+            list: async function () { return JSON.parse(await __program_call('list', '{}')); }
+        }
+    };
+""".trimIndent()
+
+private val LOCAL_ADDON_CALL_CODE = """
+    (async function() {
+        try {
+            var handle = (module.exports && module.exports.handle) || globalThis.handle;
+            if (typeof handle !== 'function') {
+                console.error('handle() not found on module.exports or globalThis');
+                __capture_result('{}');
+                return;
+            }
+            var request = JSON.parse(globalThis.__CALL_ARGS);
+            var result = await handle(request);
+            __capture_result(typeof result === 'string' ? result : JSON.stringify(result == null ? {} : result));
+        } catch (e) {
+            console.error('addon error:', e && e.message ? e.message : e, e && e.stack ? e.stack : '');
+            __capture_result('{}');
+        }
+    })();
+""".trimIndent()

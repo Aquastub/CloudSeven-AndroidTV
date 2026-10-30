@@ -30,6 +30,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import com.nuvio.tv.core.localaddon.LocalAddonManager
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
@@ -41,6 +46,7 @@ class AddonManagerViewModel @Inject constructor(
     private val collectionsDataStore: CollectionsDataStore,
     private val homeCatalogSettingsSyncService: HomeCatalogSettingsSyncService,
     private val profileManager: ProfileManager,
+    private val localAddonManager: LocalAddonManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -56,6 +62,53 @@ class AddonManagerViewModel @Inject constructor(
         get() = AddonManagementAccess.webConfigMode(profileManager.activeProfile)
 
     private var server: AddonConfigServer? = null
+
+    /** Uploaded ADINST packages waiting for the user's confirmation on the web page (token -> file path). */
+    private val stagedAdinst = ConcurrentHashMap<String, String>()
+
+    private val adinstHandler = object : AddonConfigServer.AdinstUploadHandler {
+        override fun stage(tempPath: String, fileName: String): Map<String, Any?> {
+            if (!fileName.endsWith(".adinst", ignoreCase = true) && !fileName.endsWith(".zip", ignoreCase = true)) {
+                return mapOf("ok" to false, "error" to "Choose an .adinst file")
+            }
+            val copy = File(context.cacheDir, "adinst-${UUID.randomUUID()}.adinst")
+            return try {
+                File(tempPath).copyTo(copy, overwrite = true)
+                val inspection = localAddonManager.inspect(copy.absolutePath)
+                if (inspection == null) {
+                    copy.delete()
+                    mapOf("ok" to false, "error" to "This is not a valid ADINST package")
+                } else {
+                    val token = UUID.randomUUID().toString()
+                    stagedAdinst[token] = copy.absolutePath
+                    mapOf(
+                        "ok" to true,
+                        "token" to token,
+                        "name" to inspection.name,
+                        "permissions" to inspection.permissions.sorted()
+                    )
+                }
+            } catch (e: Exception) {
+                copy.delete()
+                mapOf("ok" to false, "error" to (e.message ?: "Could not read the file"))
+            }
+        }
+
+        override fun confirm(token: String): Map<String, Any?> {
+            val path = stagedAdinst.remove(token)
+                ?: return mapOf("ok" to false, "error" to "This upload expired. Upload the file again.")
+            return when (val result = runBlocking { localAddonManager.install(path) }) {
+                is LocalAddonManager.InstallResult.Error -> mapOf("ok" to false, "error" to result.message)
+                is LocalAddonManager.InstallResult.Success -> {
+                    runBlocking { addonRepository.addAddon(result.manifestUrl) }
+                    mapOf(
+                        "ok" to true,
+                        "message" to if (result.updated) "${result.name} was updated." else "${result.name} was installed."
+                    )
+                }
+            }
+        }
+    }
     private var logoBytes: ByteArray? = null
     private var homeCatalogOrderKeys: List<String> = emptyList()
     private var disabledHomeCatalogKeys: Set<String> = emptySet()
@@ -261,7 +314,8 @@ class AddonManagerViewModel @Inject constructor(
                 )
             },
             onChangeProposed = { change -> handleChangeProposed(change) },
-            logoProvider = { logoBytes }
+            logoProvider = { logoBytes },
+            adinstHandler = adinstHandler
         )
 
         val activeServer = server

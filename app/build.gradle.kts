@@ -4,6 +4,7 @@
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.androidx.baselineprofile)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.chaquopy)
     alias(libs.plugins.ksp)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -35,6 +36,14 @@ val releaseKeyPasswordValue = env("NUVIO_RELEASE_KEY_PASSWORD")
     ?: localProperties.getProperty("NUVIO_RELEASE_KEY_PASSWORD", "815787")
 val releaseStorePasswordValue = env("NUVIO_RELEASE_STORE_PASSWORD")
     ?: localProperties.getProperty("NUVIO_RELEASE_STORE_PASSWORD", "815787")
+
+// Python for local addons (nuvio.python). 3.11 is the newest version that still supports every ABI the app
+// ships (32-bit armeabi-v7a and x86 were dropped from Python 3.12 on). Needs Python 3.11 on the build machine.
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+    }
+}
 
 android {
     namespace = "com.nuvio.tv"
