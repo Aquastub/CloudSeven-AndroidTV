@@ -37,6 +37,10 @@ val releaseKeyPasswordValue = env("NUVIO_RELEASE_KEY_PASSWORD")
 val releaseStorePasswordValue = env("NUVIO_RELEASE_STORE_PASSWORD")
     ?: localProperties.getProperty("NUVIO_RELEASE_STORE_PASSWORD", "815787")
 
+val buildsReleaseApks = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("Release", ignoreCase = true)
+}
+
 // Python for local addons (nuvio.python). 3.11 is the newest version that still supports every ABI the app
 // ships (32-bit armeabi-v7a and x86 were dropped from Python 3.12 on). Needs Python 3.11 on the build machine.
 chaquopy {
