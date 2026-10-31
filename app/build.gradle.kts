@@ -49,17 +49,23 @@ android {
     namespace = "com.nuvio.tv"
     compileSdk = 36
 
-    defaultConfig {
-        applicationId = "com.nuvio.tv"
-        minSdk = 24
-        targetSdk = 36
-        versionCode = 54
-        versionName = "0.6.3-beta"
-        // Chaquopy (Python) needs to know which CPU types to package. Release builds already say so through
-        // the ABI splits below (and Android refuses both at once); every other build, such as debug, lists them here.
-        if (!buildsReleaseApks) {
-            ndk {
-                abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+defaultConfig {
+    applicationId = "com.nuvio.tv"
+    minSdk = 24
+    targetSdk = 36
+    versionCode = 54
+    versionName = "0.6.3-beta"
+
+    if (!buildsReleaseApks) {
+        ndk {
+            abiFilters += listOf(
+                "armeabi-v7a",
+                "arm64-v8a",
+                "x86",
+                "x86_64"
+            )
+        }
+    }
 
         buildConfigField("String", "PARENTAL_GUIDE_API_URL", "\"${localProperties.getProperty("PARENTAL_GUIDE_API_URL", "")}\"")
         buildConfigField("String", "INTRODB_API_URL", "\"${localProperties.getProperty("INTRODB_API_URL", "")}\"")
