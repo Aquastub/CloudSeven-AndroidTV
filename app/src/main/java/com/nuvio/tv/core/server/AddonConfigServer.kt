@@ -25,6 +25,19 @@ class AddonConfigServer(
 
         /** Installs the file staged under [token]. */
         fun confirm(token: String): Map<String, Any?>
+
+        /** Installed local addons with their permissions and settings (and the current values). */
+        fun list(): Map<String, Any?>
+
+        /** Saves setting values ([valuesJson] is a JSON object of key -> text) for one addon. */
+        fun saveSettings(slug: String, valuesJson: String): Map<String, Any?>
+
+        fun remove(slug: String): Map<String, Any?>
+
+        /** Recent log lines of one addon (or "preroll" / "programs"); null for everything. */
+        fun logs(source: String?): Map<String, Any?>
+
+        fun clearLogs(source: String?): Map<String, Any?>
     }
 
     enum class WebConfigMode(
@@ -126,6 +139,7 @@ class AddonConfigServer(
             method == Method.GET && uri == "/adinst" -> serveAdinstPage()
             method == Method.POST && uri == "/api/adinst" -> handleAdinstUpload(session)
             method == Method.POST && uri == "/api/adinst/confirm" -> handleAdinstConfirm(session)
+            uri.startsWith("/api/local-addons") -> handleLocalAddonsApi(session, method, uri)
             method == Method.GET && uri == "/api/state" -> servePageState()
             method == Method.GET && uri == "/api/addons" -> serveAddonList()
             method == Method.POST && uri == "/api/addons" -> handleAddonUpdate(session)
@@ -167,6 +181,29 @@ class AddonConfigServer(
             jsonResponse(Response.Status.OK, handler.stage(tempPath, fileName))
         } catch (e: Exception) {
             jsonResponse(Response.Status.INTERNAL_ERROR, mapOf("ok" to false, "error" to (e.message ?: "Upload failed")))
+        }
+    }
+
+    private fun handleLocalAddonsApi(session: IHTTPSession, method: Method, uri: String): Response {
+        val handler = adinstHandler
+        if (handler == null || !webConfigMode.allowAddonManagement) {
+            return jsonResponse(Response.Status.FORBIDDEN, mapOf("ok" to false, "error" to "Not allowed"))
+        }
+        return try {
+            if (method == Method.POST) session.parseBody(HashMap())
+            val slug = session.parameters["slug"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+            val body = when {
+                method == Method.GET && uri == "/api/local-addons" -> handler.list()
+                method == Method.GET && uri == "/api/local-addons/logs" -> handler.logs(slug)
+                method == Method.POST && uri == "/api/local-addons/logs/clear" -> handler.clearLogs(slug)
+                method == Method.POST && uri == "/api/local-addons/settings" && slug != null ->
+                    handler.saveSettings(slug, session.parameters["values"]?.firstOrNull() ?: "{}")
+                method == Method.POST && uri == "/api/local-addons/remove" && slug != null -> handler.remove(slug)
+                else -> mapOf("ok" to false, "error" to "Unknown request")
+            }
+            jsonResponse(Response.Status.OK, body)
+        } catch (e: Exception) {
+            jsonResponse(Response.Status.INTERNAL_ERROR, mapOf("ok" to false, "error" to (e.message ?: "Request failed")))
         }
     }
 

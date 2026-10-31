@@ -23,6 +23,7 @@ class LocalAddonManager @Inject constructor(
     private val store: ZipAddonStore,
     private val runtime: PluginRuntime,
     private val programs: LocalAddonPrograms,
+    private val diagnostics: LocalAddonDiagnostics,
 ) {
     sealed interface InstallResult {
         data class Success(val slug: String, val name: String, val manifestUrl: String, val updated: Boolean) : InstallResult
@@ -128,7 +129,70 @@ class LocalAddonManager @Inject constructor(
             requestJson = requestJson,
             storageCall = { operation, key, value -> storage(slug, operation, key, value) },
             programCall = { operation, payload -> programs.call(slug, addon.permissions, operation, payload) },
+            onLog = { level, message -> diagnostics.record(slug, message, level) },
         )
+    }
+
+    fun hasPrerollAddon(): Boolean = installed().any { PERMISSION_PREROLL in it.permissions }
+
+    /**
+     * Asks installed addons with the "preroll" permission for a clip to play before an episode.
+     * The addon receives `{ resource: "preroll", type, id: <video id>, extra: { title, season, episode, ... } }`
+     * and answers `{ url, headers? }` (or `{}` for "no clip this time"). The first addon with a clip wins.
+     */
+    suspend fun preroll(request: PrerollRequest): PrerollClip? {
+        val candidates = installed().filter { PERMISSION_PREROLL in it.permissions }
+        diagnostics.record("preroll", "Lookup started: season=${request.seasonNumber}, episode=${request.episodeNumber}, title=${request.title.take(80)}, addons=${candidates.size}")
+        val extra = buildMap {
+            put("title", request.title)
+            put("contentType", request.contentType.orEmpty())
+            request.seasonNumber?.let { put("season", it.toString()) }
+            request.episodeNumber?.let { put("episode", it.toString()) }
+            request.episodeTitle?.let { put("episodeTitle", it) }
+            put("parentMetaId", request.parentMetaId)
+        }
+        for (addon in candidates) {
+            val raw = handle(
+                addon.slug,
+                LocalAddonRequest(resource = "preroll", type = request.contentType ?: "series", id = request.videoId.orEmpty(), extra = extra),
+            )
+            val clip = parseClip(raw, addon.slug)
+            if (clip != null) {
+                diagnostics.record("preroll", "Selected clip from '${addon.slug}', host=${clip.url.substringAfter("://").substringBefore('/').take(120)}")
+                return clip
+            }
+        }
+        diagnostics.record("preroll", "Lookup finished: no clip")
+        return null
+    }
+
+    private fun parseClip(raw: String, slug: String): PrerollClip? {
+        val obj = runCatching { JSONObject(raw) }.getOrElse {
+            diagnostics.record("preroll", "Addon '$slug' returned invalid JSON", "warn")
+            return null
+        }
+        val url = obj.optString("url").trim()
+        if (url.isBlank()) {
+            diagnostics.record("preroll", "Addon '$slug' returned no clip URL")
+            return null
+        }
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+            diagnostics.record("preroll", "Addon '$slug' returned a non-HTTP(S) URL", "warn")
+            return null
+        }
+        val headers = obj.optJSONObject("headers")?.let { h ->
+            h.keys().asSequence().mapNotNull { key -> h.optString(key).takeIf { it.isNotEmpty() }?.let { key to it } }.toMap()
+        }.orEmpty()
+        return PrerollClip(url = url, headers = headers)
+    }
+
+    /** The current values of an addon's settings (key -> text). */
+    fun settingValues(slug: String): Map<String, String> = store.loadSettings(slug)
+
+    /** Saves the user's setting values; only keys the addon declares are kept. */
+    fun saveSettings(slug: String, values: Map<String, String>) {
+        val addon = get(slug) ?: return
+        store.saveSettings(slug, values.filterKeys { key -> addon.settings.any { it.key == key } })
     }
 
     private fun storage(slug: String, operation: String, key: String, value: String): String =

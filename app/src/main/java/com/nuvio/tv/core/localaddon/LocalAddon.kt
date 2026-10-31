@@ -44,3 +44,17 @@ data class InstalledLocalAddon(
     val permissions: Set<String>,
     val settings: List<LocalAddonSetting>,
 )
+
+/** What the player knows about the episode that is about to start (sent to addons with the preroll permission). */
+data class PrerollRequest(
+    val contentType: String?,
+    val title: String,
+    val seasonNumber: Int?,
+    val episodeNumber: Int?,
+    val episodeTitle: String?,
+    val videoId: String?,
+    val parentMetaId: String,
+)
+
+/** A short clip an addon wants played before an episode. */
+data class PrerollClip(val url: String, val headers: Map<String, String> = emptyMap())

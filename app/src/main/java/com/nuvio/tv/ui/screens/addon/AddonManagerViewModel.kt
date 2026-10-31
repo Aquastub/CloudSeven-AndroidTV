@@ -47,6 +47,7 @@ class AddonManagerViewModel @Inject constructor(
     private val homeCatalogSettingsSyncService: HomeCatalogSettingsSyncService,
     private val profileManager: ProfileManager,
     private val localAddonManager: LocalAddonManager,
+    private val localAddonDiagnostics: com.nuvio.tv.core.localaddon.LocalAddonDiagnostics,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -92,6 +93,50 @@ class AddonManagerViewModel @Inject constructor(
                 copy.delete()
                 mapOf("ok" to false, "error" to (e.message ?: "Could not read the file"))
             }
+        }
+
+        override fun list(): Map<String, Any?> = mapOf(
+            "ok" to true,
+            "addons" to localAddonManager.installed().map { addon ->
+                val values = localAddonManager.settingValues(addon.slug)
+                mapOf(
+                    "slug" to addon.slug,
+                    "name" to addon.name,
+                    "permissions" to addon.permissions.sorted(),
+                    "settings" to addon.settings.map { setting ->
+                        mapOf(
+                            "key" to setting.key,
+                            "label" to setting.label,
+                            "type" to setting.type,
+                            "hint" to setting.hint,
+                            "value" to (values[setting.key] ?: "")
+                        )
+                    }
+                )
+            }
+        )
+
+        override fun saveSettings(slug: String, valuesJson: String): Map<String, Any?> = try {
+            val json = org.json.JSONObject(valuesJson)
+            val values = json.keys().asSequence().associateWith { json.optString(it, "") }
+            localAddonManager.saveSettings(slug, values)
+            mapOf("ok" to true)
+        } catch (e: Exception) {
+            mapOf("ok" to false, "error" to (e.message ?: "Could not save"))
+        }
+
+        override fun remove(slug: String): Map<String, Any?> {
+            localAddonManager.remove(slug)
+            runBlocking { addonRepository.removeAddon(com.nuvio.tv.core.localaddon.localAddonManifestUrl(slug)) }
+            return mapOf("ok" to true)
+        }
+
+        override fun logs(source: String?): Map<String, Any?> =
+            mapOf("ok" to true, "lines" to localAddonDiagnostics.lines(source))
+
+        override fun clearLogs(source: String?): Map<String, Any?> {
+            localAddonDiagnostics.clear(source)
+            return mapOf("ok" to true)
         }
 
         override fun confirm(token: String): Map<String, Any?> {

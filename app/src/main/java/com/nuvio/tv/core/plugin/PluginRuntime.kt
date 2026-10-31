@@ -406,18 +406,21 @@ class PluginRuntime @Inject constructor() {
         requestJson: String,
         storageCall: suspend (operation: String, key: String, value: String) -> String,
         programCall: suspend (operation: String, payload: String) -> String,
+        onLog: (level: String, message: String) -> Unit = { _, _ -> },
     ): String = withContext(Dispatchers.IO) {
         try {
             withTimeout(PLUGIN_TIMEOUT_MS) {
-                executeLocalAddonInternal(slug, code, requestJson, storageCall, programCall)
+                executeLocalAddonInternal(slug, code, requestJson, storageCall, programCall, onLog)
             }
         } catch (e: TimeoutCancellationException) {
             Log.w(TAG, "Local addon $slug timed out")
+            onLog("error", "Timed out after ${PLUGIN_TIMEOUT_MS / 1000}s")
             "{}"
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Local addon $slug failed: ${e.message}", e)
+            onLog("error", "Failed: ${e.message}")
             "{}"
         }
     }
@@ -428,17 +431,21 @@ class PluginRuntime @Inject constructor() {
         requestJson: String,
         storageCall: suspend (operation: String, key: String, value: String) -> String,
         programCall: suspend (operation: String, payload: String) -> String,
+        onLog: (level: String, message: String) -> Unit,
     ): String {
         val inFlightCalls = ConcurrentHashMap.newKeySet<Call>()
         var resultJson = "{}"
         try {
             quickJs(Dispatchers.IO) {
                 define("console") {
-                    function("log") { args -> Log.d("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
-                    function("error") { args -> Log.e("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
-                    function("warn") { args -> Log.w("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
-                    function("info") { args -> Log.i("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
-                    function("debug") { args -> Log.d("Addon:$slug", args.joinToString(" ") { it?.toString() ?: "null" }); null }
+                    for (level in listOf("log", "info", "debug", "warn", "error")) {
+                        function(level) { args ->
+                            val message = args.joinToString(" ") { it?.toString() ?: "null" }
+                            Log.println(if (level == "error") Log.ERROR else if (level == "warn") Log.WARN else Log.DEBUG, "Addon:$slug", message)
+                            onLog(level, message)
+                            null
+                        }
+                    }
                 }
 
                 function("__native_fetch") { args ->
