@@ -91,7 +91,8 @@ fun ContentCard(
     onLongPress: (() -> Unit)? = null,
     onClick: () -> Unit = {}
 ) {
-    val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
+    val themeRadius = NuvioTheme.packageTheme?.posterCornerRadiusDp(posterCardStyle.cornerRadius.value)?.dp ?: posterCardStyle.cornerRadius
+    val cardShape = remember(themeRadius) { RoundedCornerShape(themeRadius) }
     val baseCardWidth = when (item.posterShape) {
         PosterShape.POSTER -> posterCardStyle.width
         PosterShape.LANDSCAPE -> 260.dp

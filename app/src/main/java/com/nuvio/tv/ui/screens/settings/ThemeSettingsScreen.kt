@@ -6,18 +6,24 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -89,6 +95,18 @@ fun ThemeSettingsContent(
     var showLanguageDialog by remember { mutableStateOf(false) }
     var pendingLanguageRestart by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val themePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(8192); var total = 0
+                    while (true) { val count = input.read(buffer); if (count < 0) break; total += count; require(total <= 8 * 1024 * 1024) { "Theme archive exceeds 8 MB" }; output.write(buffer, 0, count) }
+                    output.toByteArray()
+                } ?: error("Unable to read theme file")
+            }.onSuccess(viewModel::installThemeArchive)
+                .onFailure { Toast.makeText(context, it.message ?: "Theme import failed", Toast.LENGTH_LONG).show() }
+        }
+    }
 
     val strLanguageSystem = stringResource(R.string.appearance_language_system)
     val supportedLocales = remember(strLanguageSystem) {
@@ -122,7 +140,7 @@ fun ThemeSettingsContent(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         SettingsDetailHeader(
@@ -133,7 +151,7 @@ fun ThemeSettingsContent(
         SettingsGroupCard(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
+                .height(320.dp)
         ) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
@@ -180,6 +198,32 @@ fun ThemeSettingsContent(
                 value = currentLocaleName,
                 onClick = { showLanguageDialog = true }
             )
+        }
+
+        SettingsGroupCard(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Installed Cloud 7 themes", style = MaterialTheme.typography.titleMedium)
+                Text("Import a .c7theme package or activate a theme already installed on this profile.", style = MaterialTheme.typography.bodySmall, color = NuvioColors.TextSecondary)
+                Button(onClick = { themePicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Import .c7theme")
+                }
+                Button(onClick = { viewModel.onEvent(ThemeSettingsEvent.ActivatePackage(null)) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Use built-in theme${if (uiState.activePackageId == null) " ✓" else ""}")
+                }
+                uiState.installedPackages.forEach { theme ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(theme.name, color = NuvioColors.TextPrimary)
+                            Text("${theme.author} · ${theme.version}", color = NuvioColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Button(onClick = { viewModel.onEvent(ThemeSettingsEvent.ActivatePackage(theme.id)) }) {
+                            Text(if (uiState.activePackageId == theme.id) "Active" else "Apply")
+                        }
+                        Button(onClick = { viewModel.onEvent(ThemeSettingsEvent.RemovePackage(theme.id)) }) { Text("Remove") }
+                    }
+                }
+                uiState.packageMessage?.let { Text(it, color = NuvioColors.TextSecondary) }
+            }
         }
     }
 
