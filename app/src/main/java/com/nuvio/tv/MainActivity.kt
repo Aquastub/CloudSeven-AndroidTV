@@ -51,6 +51,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -109,8 +110,6 @@ import com.nuvio.tv.core.auth.AuthManager
 import com.nuvio.tv.data.local.AppOnboardingDataStore
 import com.nuvio.tv.data.local.LayoutPreferenceDataStore
 import com.nuvio.tv.data.local.ThemeDataStore
-import com.nuvio.tv.data.local.ThemePackageDataStore
-import com.nuvio.tv.core.theme.ThemePackage
 import com.nuvio.tv.data.repository.TraktProgressService
 import com.nuvio.tv.domain.model.AppFont
 import com.nuvio.tv.domain.model.AppTheme
@@ -156,7 +155,6 @@ data class DrawerItem(
 private data class MainUiPrefs(
     val theme: AppTheme = AppTheme.WHITE,
     val font: AppFont = AppFont.INTER,
-    val customTheme: ThemePackage? = null,
     val hasChosenLayout: Boolean? = null,
     val sidebarCollapsed: Boolean = false,
     val modernSidebarEnabled: Boolean = false,
@@ -168,9 +166,6 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var themeDataStore: ThemeDataStore
-
-    @Inject
-    lateinit var themePackageDataStore: ThemePackageDataStore
 
     @Inject
     lateinit var layoutPreferenceDataStore: LayoutPreferenceDataStore
@@ -275,7 +270,7 @@ class MainActivity : ComponentActivity() {
                 activeProfile?.avatarId?.let { avatarRepository.getAvatarImageUrl(it, avatarCatalog) }
             }
 
-            val mainUiPrefsFlow = remember(themeDataStore, themePackageDataStore, layoutPreferenceDataStore) {
+            val mainUiPrefsFlow = remember(themeDataStore, layoutPreferenceDataStore) {
                 combine(
                     themeDataStore.selectedTheme,
                     themeDataStore.selectedFont,
@@ -292,13 +287,11 @@ class MainActivity : ComponentActivity() {
                     )
                 }.combine(layoutPreferenceDataStore.modernSidebarBlurEnabled) { prefs, modernSidebarBlurPref ->
                     prefs.copy(modernSidebarBlurPref = modernSidebarBlurPref)
-                }.combine(themePackageDataStore.active) { prefs, customTheme ->
-                    prefs.copy(customTheme = customTheme)
                 }
             }
             val mainUiPrefs by mainUiPrefsFlow.collectAsState(initial = MainUiPrefs(hasChosenLayout = null))
 
-            NuvioTheme(appTheme = mainUiPrefs.theme, appFont = mainUiPrefs.font, customTheme = mainUiPrefs.customTheme) {
+            NuvioTheme(appTheme = mainUiPrefs.theme, appFont = mainUiPrefs.font) {
                 CompositionLocalProvider(
                     LocalBringIntoViewSpec provides NuvioScrollDefaults.smoothScrollSpec
                 ) {
@@ -413,6 +406,7 @@ class MainActivity : ComponentActivity() {
                     val rootRoutes = remember {
                         setOf(
                             Screen.Home.route,
+                            Screen.LiveTv.route,
                             Screen.Search.route,
                             Screen.Library.route,
                             Screen.Settings.route,
@@ -422,12 +416,14 @@ class MainActivity : ComponentActivity() {
 
                     val strNavHome = stringResource(R.string.nav_home)
                     val strNavSearch = stringResource(R.string.nav_search)
+                    val strNavLiveTv = "Live TV"
                     val strNavLibrary = stringResource(R.string.nav_library)
                     val strNavAddons = stringResource(R.string.nav_addons)
                     val strNavSettings = stringResource(R.string.nav_settings)
                     val drawerItems = remember(
                         strNavHome,
                         strNavSearch,
+                        strNavLiveTv,
                         strNavLibrary,
                         strNavAddons,
                         strNavSettings
@@ -442,6 +438,11 @@ class MainActivity : ComponentActivity() {
                                 route = Screen.Search.route,
                                 label = strNavSearch,
                                 iconRes = R.raw.sidebar_search
+                            ),
+                            DrawerItem(
+                                route = Screen.LiveTv.route,
+                                label = strNavLiveTv,
+                                icon = Icons.Default.Tv
                             ),
                             DrawerItem(
                                 route = Screen.Library.route,

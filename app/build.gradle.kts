@@ -347,7 +347,9 @@ android {
             isEnable = true
             reset()
             include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            isUniversalApk = true
+            // Do not bundle every CPU architecture into one oversized universal APK.
+            // Release builds produce one smaller APK per supported ABI.
+            isUniversalApk = false
         }
     }
 

@@ -21,6 +21,7 @@ import com.nuvio.tv.ui.screens.home.HomeScreen
 import com.nuvio.tv.ui.screens.addon.AddonManagerScreen
 import com.nuvio.tv.ui.screens.addon.CatalogOrderScreen
 import com.nuvio.tv.ui.screens.library.LibraryScreen
+import com.nuvio.tv.ui.screens.livetv.LiveTvScreen
 import com.nuvio.tv.ui.screens.player.PlayerPrerollGate
 import com.nuvio.tv.ui.screens.player.PlayerScreen
 import com.nuvio.tv.ui.screens.plugin.PluginScreen
@@ -892,6 +893,15 @@ fun NuvioNavHost(
 
         composable(Screen.Discover.route) {
             DiscoverScreen(
+                onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                    navController.navigate(Screen.Detail.createRoute(itemId, itemType, addonBaseUrl))
+                }
+            )
+        }
+
+        composable(Screen.LiveTv.route) {
+            LiveTvScreen(
+                showBuiltInHeader = !hideBuiltInHeaders,
                 onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
                     navController.navigate(Screen.Detail.createRoute(itemId, itemType, addonBaseUrl))
                 }
